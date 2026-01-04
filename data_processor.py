@@ -8,18 +8,20 @@ def convert_csv_to_1m_kline(input_path, out_path, chunksize=200_000):
     kline_dict = {}
 
     for chunk in pd.read_csv(input_path, chunksize=chunksize):
-        chunk["datetime"] = pd.to_datetime(chunk["timestamp"], unit="s", utc=True)
-        chunk["utc_time"] = chunk["datetime"].dt.floor("1min")
+        # (timestamp // 60) * 60 會將秒數無條件捨去到最近的 60 秒 (即 1 分鐘)
+        chunk["ts_bucket"] = (chunk["timestamp"] // 60).astype(int) * 60
 
-        for (asset_id, utc_time), group in chunk.groupby(["asset_id", "utc_time"]):
+        # Groupby 改用這個整數 bucket
+        for (asset_id, ts_bucket), group in chunk.groupby(["asset_id", "ts_bucket"]):
             o = group["price"].iloc[0]
             h = group["price"].max()
             l = group["price"].min()
             c = group["price"].iloc[-1]
             v = group["token_amount"].sum()
 
-            utc_time_str = utc_time.strftime("%Y-%m-%dT%H:%M:%SZ")
-            key = (asset_id, utc_time_str)
+            # 為了保持輸出格式一致，我們只在最後輸出時轉一次字串，或者直接存 timestamp
+            # 這裡示範轉回原本的字串格式 key，但這是在聚合後的少量數據上做，速度很快
+            key = (asset_id, ts_bucket)
 
             if key not in kline_dict:
                 kline_dict[key] = [o, h, l, c, v]
@@ -29,10 +31,17 @@ def convert_csv_to_1m_kline(input_path, out_path, chunksize=200_000):
                 kline_dict[key][3] = c
                 kline_dict[key][4] += v
 
-    rows = [[aid, t, *vals] for (aid, t), vals in kline_dict.items()]
+    # 轉 DataFrame
+    rows = []
+    for (aid, ts_bucket), vals in kline_dict.items():
+        # 如果最終檔案需要閱讀，這裡再轉字串；如果機器讀取，保留 ts_bucket (int) 更好
+        utc_time_str = pd.to_datetime(ts_bucket, unit="s", utc=True).strftime("%Y-%m-%dT%H:%M:%SZ")
+        rows.append([aid, utc_time_str, *vals])
+
     df_out = pd.DataFrame(rows, columns=["asset_id", "utc_time", "open", "high", "low", "close", "volume"])
 
     if not df_out.empty:
+        # 字串排序
         df_out = df_out.sort_values(["asset_id", "utc_time"])
         df_out.to_csv(out_path, index=False, encoding="utf-8")
 

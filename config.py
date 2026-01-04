@@ -8,7 +8,7 @@ SLUG_CSV_PATH = DATA_DIR / "slugs_tokens_24h.csv"
 ORDERBOOK_DIR = DATA_DIR / "orderbook_converted"
 KLINE_DIR = DATA_DIR / "kline_1m"
 SQLITE_DB_PATH = DATA_DIR / "orderbook_all.sqlite"
-MERGED_KLINE_PATH = DATA_DIR / "kline_1m_merged.csv"
+MERGED_KLINE_PATH = DATA_DIR / "polymarket_1m.csv"
 
 # 確保資料夾存在
 for p in [DATA_DIR, ORDERBOOK_DIR, KLINE_DIR]:

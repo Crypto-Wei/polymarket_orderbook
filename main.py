@@ -61,7 +61,7 @@ def run_pipeline():
     batch_convert_to_kline()
 
     # 4. (可選) 匯入資料庫
-    # merge_to_sqlite()
+    merge_to_sqlite()
 
     # 5. (可選) 合併 K 線
     merge_kline_csv()
