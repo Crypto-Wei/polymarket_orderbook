@@ -5,7 +5,9 @@ import pandas as pd
 import os
 from datetime import date, timedelta, datetime
 from zoneinfo import ZoneInfo
+
 # 載入設定檔變數
+# 確保目錄下有 config.py 且包含 GAMMA_API_URL, SLUG_CSV_PATH, START_DATE, END_DATE
 from config import GAMMA_API_URL, SLUG_CSV_PATH, START_DATE, END_DATE
 
 
@@ -42,14 +44,14 @@ def ampm_to_24h(hour_str: str) -> int:
         raise ValueError(f"Invalid hour format: {hour_str}")
 
 
-def et_to_utc_iso(d: date, hour_str: str) -> str:
+def et_to_unix(d: date, hour_str: str) -> int:
     """
-    將美東時間 (ET) 轉換為世界協調時間 (UTC) 的 ISO 格式字串。
+    將美東時間 (ET) 轉換為 Unix Timestamp (整數秒)。
 
     關鍵邏輯：
     1. 建立美東時間的 Timestamp。
-    2. 使用 tz_localize 處理時區，並設定 ambiguous=True 以處理日光節約時間切換時的模糊時間點。
-    3. 轉換為 UTC 時區。
+    2. 使用 tz_localize 處理時區，並設定 ambiguous=True 以處理日光節約時間切換。
+    3. 轉換為 timestamp (float) 並轉為 int。
     """
     hour_24 = ampm_to_24h(hour_str)
     # 建立無時區的時間戳
@@ -60,8 +62,8 @@ def et_to_utc_iso(d: date, hour_str: str) -> str:
         ambiguous=True,
         nonexistent="shift_forward"
     )
-    # 轉為 UTC 並輸出字串
-    return dt_et.tz_convert(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # 回傳整數 Unix Timestamp
+    return int(dt_et.timestamp())
 
 
 # --- 核心功能：斷點續傳邏輯 ---
@@ -89,7 +91,7 @@ def get_last_processed_info():
             if not last_line:
                 return None
 
-            # CSV 欄位順序: date, hour, slug, yes_token, no_token, utc_time
+            # CSV 欄位順序: date, hour, slug, yes_token, no_token, timestamp
             parts = last_line.split(",")
             last_date_str = parts[0]
             last_hour_str = parts[1]
@@ -118,61 +120,56 @@ def fetch_market_ids():
         last_date, last_h = last_info
         print(f"發現舊資料，最後記錄為: {last_date} {hour_to_ampm(last_h)}")
 
-        # 計算「接續點」：如果是當天最後一小時 (23點)，則從隔天 0 點開始
+        # 計算「接續點」
         if last_h == 23:
             current_date = last_date + timedelta(days=1)
             start_hour_idx = 0
         else:
-            # 否則從當天的下一小時開始
             current_date = last_date
             start_hour_idx = last_h + 1
 
-        file_mode = "a"  # 設定為追加模式 (Append)
+        file_mode = "a"  # 追加模式
         print(f"將從 {current_date} 的 {hour_to_ampm(start_hour_idx)} 繼續抓取...")
     else:
         # 無舊資料，從頭開始
         current_date = config_start
         start_hour_idx = 0
-        file_mode = "w"  # 設定為寫入模式 (Write/Overwrite)
+        file_mode = "w"  # 寫入模式
         print(f"從頭開始抓取市場 ID，從 {config_start} 到 {config_end} ...")
 
-    # 防呆機制：若接續日期已超過設定結束日期，則直接結束
     if current_date > config_end:
         print("所有日期已抓取完畢，無須執行。")
         return
 
-    # 步驟 2: 開啟檔案進行寫入
-    # 使用 newline='' 避免在 Windows 上產生多餘空行
+    # 步驟 2: 開啟檔案
     with open(SLUG_CSV_PATH, file_mode, newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
 
-        # 只有在新檔案模式下才寫入標頭，避免在檔案中間重複插入
+        # 只有在新檔案模式下才寫入標頭
+        # 注意：最後一欄已改為 timestamp
         if file_mode == "w":
-            writer.writerow(["date", "hour", "slug", "yes_token", "no_token", "utc_time"])
+            writer.writerow(["date", "hour", "slug", "yes_token", "no_token", "timestamp"])
 
         count = 0
 
         # 步驟 3: 日期迴圈
         while current_date <= config_end:
-            month = current_date.strftime("%B").lower()  # 例如: october
+            month = current_date.strftime("%B").lower()
             day = current_date.day
 
             # 判斷當天從幾點開始抓取
             if count == 0 and file_mode == "a":
-                # 這是「接續執行」的第一天，使用計算出的接續點
                 range_start = start_hour_idx
             else:
-                # 其他所有日期 (或是全新執行)，都從 0 點開始
                 range_start = 0
 
             # 步驟 4: 小時迴圈
             for h in range(range_start, 24):
                 hour_str = hour_to_ampm(h)
-                # 拼湊 API 查詢用的 slug
                 slug = f"bitcoin-up-or-down-{month}-{day}-{hour_str}-et"
 
                 yes_token, no_token = None, None
-                utc_time = ""
+                timestamp = 0
 
                 try:
                     # 發送 API 請求
@@ -180,29 +177,25 @@ def fetch_market_ids():
                     if resp.status_code == 200:
                         data = resp.json()
                         if data:
-                            # 解析回傳的 JSON 取得 Token IDs
                             market = data[0]
                             ids = json.loads(market.get("clobTokenIds", "[]"))
-                            if len(ids) > 0: yes_token = ids[0]  # Yes Token
-                            if len(ids) > 1: no_token = ids[1]  # No Token
+                            if len(ids) > 0: yes_token = ids[0]
+                            if len(ids) > 1: no_token = ids[1]
 
-                    # 計算 UTC 時間 (用於資料庫或分析)
-                    utc_time = et_to_utc_iso(current_date, hour_str)
+                    # 計算 Unix 時間 (整數)
+                    timestamp = et_to_unix(current_date, hour_str)
 
-                    # 寫入 CSV
-                    writer.writerow([str(current_date), hour_str, slug, yes_token, no_token, utc_time])
+                    # 寫入 CSV (最後一欄為 timestamp)
+                    writer.writerow([str(current_date), hour_str, slug, yes_token, no_token, timestamp])
 
                     count += 1
 
                 except Exception as e:
-                    # 簡單的錯誤捕捉，避免單一請求失敗中斷整個程序
                     print(f"ERROR fetching {slug}: {e}")
 
             print(f"已處理日期: {current_date} (當日起始小時: {range_start})")
 
-            # 日期推進
             current_date += timedelta(days=1)
-            # 重置起始小時標記 (確保下一天從 0 點開始)
             start_hour_idx = 0
 
     print(f"\n抓取完成。本次執行共新增 {count} 筆。路徑: {SLUG_CSV_PATH}")

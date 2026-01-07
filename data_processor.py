@@ -8,10 +8,11 @@ def convert_csv_to_1m_kline(input_path, out_path, chunksize=200_000):
     kline_dict = {}
 
     for chunk in pd.read_csv(input_path, chunksize=chunksize):
-        # (timestamp // 60) * 60 會將秒數無條件捨去到最近的 60 秒 (即 1 分鐘)
+        # 1. 計算：將 timestamp 無條件捨去到最近的 60 秒 (1分鐘)
+        # 這裡完全是整數運算，非常快
         chunk["ts_bucket"] = (chunk["timestamp"] // 60).astype(int) * 60
 
-        # Groupby 改用這個整數 bucket
+        # 2. 分組聚合
         for (asset_id, ts_bucket), group in chunk.groupby(["asset_id", "ts_bucket"]):
             o = group["price"].iloc[0]
             h = group["price"].max()
@@ -19,8 +20,6 @@ def convert_csv_to_1m_kline(input_path, out_path, chunksize=200_000):
             c = group["price"].iloc[-1]
             v = group["token_amount"].sum()
 
-            # 為了保持輸出格式一致，我們只在最後輸出時轉一次字串，或者直接存 timestamp
-            # 這裡示範轉回原本的字串格式 key，但這是在聚合後的少量數據上做，速度很快
             key = (asset_id, ts_bucket)
 
             if key not in kline_dict:
@@ -31,18 +30,14 @@ def convert_csv_to_1m_kline(input_path, out_path, chunksize=200_000):
                 kline_dict[key][3] = c
                 kline_dict[key][4] += v
 
-    # 轉 DataFrame
-    rows = []
-    for (aid, ts_bucket), vals in kline_dict.items():
-        # 如果最終檔案需要閱讀，這裡再轉字串；如果機器讀取，保留 ts_bucket (int) 更好
-        utc_time_str = pd.to_datetime(ts_bucket, unit="s", utc=True).strftime("%Y-%m-%dT%H:%M:%SZ")
-        rows.append([aid, utc_time_str, *vals])
+    # 3. 輸出：直接使用 ts_bucket (整數)，不轉字串
+    rows = [[aid, ts, *vals] for (aid, ts), vals in kline_dict.items()]
 
-    df_out = pd.DataFrame(rows, columns=["asset_id", "utc_time", "open", "high", "low", "close", "volume"])
+    # 欄位名稱改為 timestamp 以反映內容是整數
+    df_out = pd.DataFrame(rows, columns=["asset_id", "timestamp", "open", "high", "low", "close", "volume"])
 
     if not df_out.empty:
-        # 字串排序
-        df_out = df_out.sort_values(["asset_id", "utc_time"])
+        df_out = df_out.sort_values(["asset_id", "timestamp"])
         df_out.to_csv(out_path, index=False, encoding="utf-8")
 
 
@@ -94,7 +89,8 @@ def merge_kline_csv():
             dfs.append(pd.read_csv(KLINE_DIR / file))
 
     if dfs:
-        merged_df = pd.concat(dfs, ignore_index=True).sort_values("utc_time")
+        # 修改這裡：將 "utc_time" 改為 "timestamp"
+        merged_df = pd.concat(dfs, ignore_index=True).sort_values("timestamp")
         merged_df.to_csv(MERGED_KLINE_PATH, index=False)
         print(f"合併完成: {MERGED_KLINE_PATH}")
     else:
