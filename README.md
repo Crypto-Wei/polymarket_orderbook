@@ -89,8 +89,8 @@ python main.py
 Data/
 ├── slugs_tokens_24h.csv     # 市場列表 (包含 Token IDs)
 ├── orderbook_converted/     # 原始交易數據 CSV (清洗後的 Tick Data)
-├── kline_1m/                # 1 分鐘 K 線數據 CSV (OHLCV)
-└── kline_1m_merged.csv      # 合併後的大檔 (所有市場的 K 線)
+├── polymarket_1m/                # 1 分鐘 K 線數據 CSV (OHLCV)
+└── polymarket_1m.csv      # 合併後的大檔 (所有市場的 K 線)
 
 ```
 
